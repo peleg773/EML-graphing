@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EML Calculator — E(a,b)</title>
+  <link rel="stylesheet" href="styles.css" />
+  <script>
+    window.MathJax = {
+      tex: { inlineMath: [['$','$'],['\\(','\\)']] },
+      svg: { fontCache: 'global' },
+      startup: {
+        ready() {
+          MathJax.startup.defaultReady();
+          MathJax.startup.promise.then(() => {
+            window.__mathjaxReady = true;
+            if (typeof retypesetAllPreviews === 'function') retypesetAllPreviews();
+          });
+        }
+      }
+    };
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js"></script>
+</head>
+<body>
+  <header>
+    <h1><span class="accent">E</span>ML Calculator <span style="color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 12px;">Graphing calculator for <code style="background: var(--panel-2); padding: 2px 6px; border-radius: 4px;">E(a,b) = eᵃ − log(b)</code></span></h1>
+    <div class="spacer"></div>
+    <button id="reset-view" title="Reset graph view">Reset View</button>
+    <button id="theme-toggle" title="Toggle theme">Theme</button>
+  </header>
+  <main>
+    <aside class="panel left">
+      <div class="panel-header">Expressions</div>
+      <div class="panel-body left-body">
+        <div class="rows-scroll">
+          <div id="rows"></div>
+          <button id="add-row">+ Add Expression</button>
+        </div>
+        <div id="keypad" class="keypad">
+          <div class="keypad-row">
+            <button data-k="x">x</button>
+            <button data-k="^2" class="small">x²</button>
+            <button data-k="^">x^y</button>
+            <button data-k="(">(</button>
+            <button data-k=")">)</button>
+            <button data-k=".">.</button>
+          </div>
+          <div class="keypad-row">
+            <button data-k="+">+</button><button data-k="-">−</button>
+            <button data-k="*">×</button><button data-k="/">÷</button>
+            <button data-k="sqrt(" class="small">√</button><button data-k="abs(" class="small">|·|</button>
+          </div>
+          <div class="keypad-row">
+            <button data-k="sin(">sin</button><button data-k="cos(">cos</button>
+            <button data-k="tan(">tan</button>
+            <button data-k="log(">log</button><button data-k="ln(">ln</button>
+            <button data-k="exp(">exp</button>
+          </div>
+          <div class="keypad-row">
+            <button data-k="asin(">asin</button><button data-k="acos(">acos</button>
+            <button data-k="atan(">atan</button>
+            <button data-k="sinh(">sinh</button><button data-k="cosh(">cosh</button>
+            <button data-k="tanh(">tanh</button>
+          </div>
+          <div class="keypad-row">
+            <button data-k="pi">π</button><button data-k="e">e</button>
+            <button data-k="phi">φ</button><button data-k="tau">τ</button>
+            <button data-k="i">i</button><button data-k="backspace" class="back">⌫</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+    <section class="panel center">
+      <div class="panel-header">
+        Graph
+        <div class="spacer"></div>
+        <span style="font-size: 11px; color: var(--muted); text-transform:none;letter-spacing:0">Drag to pan · Scroll to zoom · Double-click to reset</span>
+      </div>
+      <div id="graph-wrap"><canvas id="canvas"></canvas></div>
+    </section>
+    <aside class="panel right">
+      <div class="panel-header">
+        EML Expression
+      </div>
+      <div class="panel-body">
+        <div class="eml-controls">
+          <button id="eml-copy">Copy</button>
+          <span style="color: var(--muted); font-size: 11px;">You can edit this directly to graph custom EML</span>
+        </div>
+        <textarea id="eml-out" spellcheck="false" autocomplete="off"></textarea>
+        <div id="eml-stats"></div>
+        <div id="row-value"></div>
+        <div class="hint">
+          Every elementary function reduces to nested <code>E(a,b) = exp(a) − log(b)</code> over the atoms <code>1</code> and <code>x</code>. See <a href="https://arxiv.org/abs/2603.21852" target="_blank" class="citation">Odrzywołek (2026)</a> for details.
+        </div>
+      </div>
+    </aside>
+  </main>
+  <script src="complex.js"></script>
+  <script src="eml.js"></script>
+  <script src="compiler.js"></script>
+  <script src="graph.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
