@@ -1,9 +1,9 @@
 const PALETTE = ["#6ea8fe", "#ff8fa3", "#7ee787", "#f2cc60", "#c4a7e7", "#76e4d8", "#ffb38a"];
 
 const state = {
-  rows: [],       // { id, text, color, visible, error, emlString, emlNode, optimizedNode, astUsesX, value, source, defName, defArgs, defBodyAst, thickness, lineStyle, opacity }
+  rows: [],
   selectedId: null,
-  style: "E",     // "E" or "EML"
+  style: "E",
   dark: true,
 };
 
@@ -27,6 +27,10 @@ function init() {
   graph = new Graph($("canvas"));
   window.addEventListener("resize", () => graph.resize());
 
+  graph.onViewChange = () => {
+    updateSpecialPoints();
+  };
+
   els.addRow.addEventListener("click", () => { addRow(""); });
   els.emlCopy.addEventListener("click", copyEml);
   els.themeToggle.addEventListener("click", toggleTheme);
@@ -34,7 +38,6 @@ function init() {
 
   els.emlOut.addEventListener("input", onEmlEdited);
 
-  // Keypad: insert symbols at cursor of the selected row's input.
   document.getElementById("keypad").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-k]");
     if (!btn) return;
@@ -66,8 +69,14 @@ function init() {
   });
 
   addRow("sin(x)");
-  addRow("x^2 / 4");
+  addRow("x^2 / 4.5");
   addRow("pi");
+
+  // Ensure special points are computed after layout is fully resolved
+  requestAnimationFrame(() => {
+    graph.resize();
+    redraw();
+  });
 }
 
 function addRow(text) {
@@ -90,13 +99,15 @@ function addRow(text) {
     thickness: 2,
     lineStyle: "line",
     opacity: 1,
+    sliderMin: -10,
+    sliderMax: 10,
+    sliderStep: 0.1,
   };
   state.rows.push(row);
   state.selectedId = id;
   recompileAll();
   renderRows();
   redraw();
-  // Auto-focus the input of the newly added row.
   const newCard = els.rows.querySelector(`.row[data-id="${id}"]`);
   const newInput = newCard && newCard.querySelector(".row-input");
   if (newInput && !newInput.disabled) newInput.focus();
@@ -116,12 +127,17 @@ function markSelected() {
   }
 }
 
+function isParamRow(r) {
+  return r.defName && !r.defArgs && !r.astUsesX && r.value !== null && r.source === "math";
+}
+
 function renderRows() {
-  // Preserve focus + cursor on the currently focused input, if any.
   const active = document.activeElement;
   const wasFocusedRowId = active && active.classList && active.classList.contains("row-input")
     ? Number(active.closest(".row")?.dataset.id) : null;
   const caret = wasFocusedRowId ? [active.selectionStart, active.selectionEnd] : null;
+  const wasFocusedSlider = active && active.classList && active.classList.contains("param-slider")
+    ? Number(active.closest(".row")?.dataset.id) : null;
 
   els.rows.innerHTML = "";
   for (const r of state.rows) {
@@ -136,7 +152,6 @@ function renderRows() {
     if (!r.visible) chip.classList.add("chip-hidden");
     chip.title = "Click to hide/show · Long-press for style options";
 
-    // Short click = toggle visibility, long press = open popover
     let pressTimer = null;
     let didLongPress = false;
     chip.addEventListener("mousedown", (e) => {
@@ -159,9 +174,26 @@ function renderRows() {
     chip.addEventListener("mouseleave", () => {
       clearTimeout(pressTimer);
     });
-    // Prevent the default click from firing after long press
     chip.addEventListener("click", (e) => {
       e.stopPropagation();
+    });
+
+    chip.addEventListener("touchstart", (e) => {
+      e.stopPropagation();
+      didLongPress = false;
+      pressTimer = setTimeout(() => {
+        didLongPress = true;
+        openStylePopover(chip, r);
+      }, 400);
+    }, { passive: true });
+    chip.addEventListener("touchend", (e) => {
+      e.stopPropagation();
+      clearTimeout(pressTimer);
+      if (!didLongPress) {
+        r.visible = !r.visible;
+        renderRows();
+        redraw();
+      }
     });
 
     const input = document.createElement("input");
@@ -180,12 +212,12 @@ function renderRows() {
       r.source = "math";
       recompileAll();
       redraw();
-      // Update badges/previews for all cards since definitions may affect others
       for (const card2 of els.rows.querySelectorAll(".row")) {
         const r2 = state.rows.find(rr => rr.id === Number(card2.dataset.id));
         if (r2) {
           updateRowBadge(card2, r2);
           updateRowPreview(card2, r2);
+          updateRowSlider(card2, r2);
         }
       }
     });
@@ -211,6 +243,7 @@ function renderRows() {
 
     card.addEventListener("mousedown", (e) => {
       if (e.target.closest("button")) return;
+      if (e.target.closest(".param-slider-row")) return;
       state.selectedId = r.id;
       markSelected();
       refreshEmlPanel();
@@ -235,6 +268,100 @@ function renderRows() {
     badge.className = "row-badge";
     card.appendChild(badge);
 
+    // Parameter slider
+    if (isParamRow(r)) {
+      const sliderRow = document.createElement("div");
+      sliderRow.className = "param-slider-row";
+
+      const val = r.value.re !== undefined ? r.value.re : r.value;
+      // Clip value if outside range
+      if (val < r.sliderMin) {
+        r.text = `${r.defName} = ${r.sliderMin}`;
+        recompileAll();
+      }
+      if (val > r.sliderMax) {
+        r.text = `${r.defName} = ${r.sliderMax}`;
+        recompileAll();
+      }
+      const clampedVal = Math.max(r.sliderMin, Math.min(r.sliderMax, val));
+
+      const minLabel = document.createElement("input");
+      minLabel.type = "number";
+      minLabel.className = "slider-bound";
+      minLabel.value = r.sliderMin;
+      minLabel.title = "Slider minimum";
+      minLabel.addEventListener("change", () => {
+        r.sliderMin = Number(minLabel.value);
+        const curVal = r.value.re !== undefined ? r.value.re : r.value;
+        if (curVal < r.sliderMin) {
+          r.text = `${r.defName} = ${r.sliderMin}`;
+          recompileAll();
+          redraw();
+        }
+        renderRows();
+      });
+
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.className = "param-slider";
+      slider.min = r.sliderMin;
+      slider.max = r.sliderMax;
+      slider.step = r.sliderStep;
+      slider.value = clampedVal;
+      slider.addEventListener("input", () => {
+        const newVal = Number(slider.value);
+        r.text = `${r.defName} = ${newVal}`;
+        const inp = card.querySelector(".row-input");
+        if (inp) inp.value = r.text;
+        recompileAll();
+        redraw();
+        for (const card2 of els.rows.querySelectorAll(".row")) {
+          const r2 = state.rows.find(rr => rr.id === Number(card2.dataset.id));
+          if (r2) {
+            updateRowBadge(card2, r2);
+            updateRowPreview(card2, r2);
+          }
+        }
+      });
+
+      const maxLabel = document.createElement("input");
+      maxLabel.type = "number";
+      maxLabel.className = "slider-bound";
+      maxLabel.value = r.sliderMax;
+      maxLabel.title = "Slider maximum";
+      maxLabel.addEventListener("change", () => {
+        r.sliderMax = Number(maxLabel.value);
+        const curVal = r.value.re !== undefined ? r.value.re : r.value;
+        if (curVal > r.sliderMax) {
+          r.text = `${r.defName} = ${r.sliderMax}`;
+          recompileAll();
+          redraw();
+        }
+        renderRows();
+      });
+
+      const stepLabel = document.createElement("input");
+      stepLabel.type = "number";
+      stepLabel.className = "slider-bound slider-step";
+      stepLabel.value = r.sliderStep;
+      stepLabel.title = "Step size";
+      stepLabel.min = "0.001";
+      stepLabel.step = "any";
+      stepLabel.addEventListener("change", () => {
+        const v = Number(stepLabel.value);
+        if (v > 0) {
+          r.sliderStep = v;
+          renderRows();
+        }
+      });
+
+      sliderRow.appendChild(minLabel);
+      sliderRow.appendChild(slider);
+      sliderRow.appendChild(maxLabel);
+      sliderRow.appendChild(stepLabel);
+      card.appendChild(sliderRow);
+    }
+
     els.rows.appendChild(card);
     updateRowBadge(card, r);
     updateRowPreview(card, r);
@@ -247,7 +374,21 @@ function renderRows() {
       if (caret) inp.setSelectionRange(caret[0], caret[1]);
     }
   }
+  if (wasFocusedSlider) {
+    const card = els.rows.querySelector(`.row[data-id="${wasFocusedSlider}"]`);
+    const sl = card && card.querySelector(".param-slider");
+    if (sl) sl.focus();
+  }
   refreshEmlPanel();
+}
+
+function updateRowSlider(card, r) {
+  const existing = card.querySelector(".param-slider-row");
+  if (isParamRow(r) && !existing) {
+    renderRows();
+  } else if (!isParamRow(r) && existing) {
+    existing.remove();
+  }
 }
 
 function updateRowPreview(card, r) {
@@ -274,43 +415,52 @@ function retypesetAllPreviews() {
 }
 window.retypesetAllPreviews = retypesetAllPreviews;
 
-function updateRowBadge(card, r) {
-  const badge = card.querySelector(".row-badge");
+function setBadge(badge, cls, mainText, tokenNode) {
   badge.className = "row-badge";
-  if (r.error) {
-    badge.classList.add("error");
-    badge.textContent = r.error;
-    return;
-  }
-  if (r.defName && !r.astUsesX && !r.defArgs) {
-    badge.classList.add("value");
-    const label = r.value !== null ? `${r.defName} = ${cToString(r.value, 12)}` : `defines ${r.defName}`;
-    badge.textContent = label;
-    return;
-  }
-  if (r.defName && r.defArgs) {
-    badge.classList.add("eml-mode");
-    badge.textContent = `defines ${r.defName}(${r.defArgs.join(", ")})`;
-    return;
-  }
-  if (r.source === "eml") {
-    badge.classList.add("eml-mode");
-    badge.textContent = "EML source — edit it on the right";
-    return;
-  }
-  if (!r.astUsesX && r.value !== null) {
-    badge.classList.add("value");
-    badge.textContent = "= " + cToString(r.value, 12);
-    return;
-  }
-  if (r.emlString) {
-    badge.textContent = `${countTokens(r.emlNode)} tokens`;
-  } else {
-    badge.textContent = "";
+  if (cls) badge.classList.add(cls);
+  badge.innerHTML = "";
+  const main = document.createElement("span");
+  main.className = "badge-main";
+  main.textContent = mainText;
+  badge.appendChild(main);
+  if (tokenNode) {
+    const tok = document.createElement("span");
+    tok.className = "badge-tokens";
+    tok.textContent = `${countTokens(tokenNode)} tokens`;
+    badge.appendChild(tok);
   }
 }
 
-// Build user definitions from rows above the given row index.
+function updateRowBadge(card, r) {
+  const badge = card.querySelector(".row-badge");
+  if (r.error) {
+    setBadge(badge, "error", r.error, null);
+    return;
+  }
+  if (r.defName && !r.astUsesX && !r.defArgs) {
+    const label = r.value !== null ? `${r.defName} = ${cToString(r.value, 12)}` : `defines ${r.defName}`;
+    setBadge(badge, "value", label, r.emlNode);
+    return;
+  }
+  if (r.defName && r.defArgs) {
+    setBadge(badge, "eml-mode", `defines ${r.defName}(${r.defArgs.join(", ")})`, null);
+    return;
+  }
+  if (r.source === "eml") {
+    setBadge(badge, "eml-mode", "EML source — edit it on the right", r.emlNode);
+    return;
+  }
+  if (!r.astUsesX && r.value !== null) {
+    setBadge(badge, "value", "= " + cToString(r.value, 12), r.emlNode);
+    return;
+  }
+  if (r.emlString) {
+    setBadge(badge, null, "", r.emlNode);
+  } else {
+    setBadge(badge, null, "", null);
+  }
+}
+
 function buildDefs(upToIndex) {
   const vars = {};
   const funcs = {};
@@ -320,12 +470,9 @@ function buildDefs(upToIndex) {
     const r = state.rows[i];
     if (!r.defName || r.error) continue;
     if (r.defArgs) {
-      // Function definition
       funcs[r.defName] = { params: r.defArgs, bodyAst: r.defBodyAst };
-      // A user function "uses x" if its body references x beyond its own params
       funcUsesX[r.defName] = mathUsesXExcluding(r.defBodyAst, r.defArgs);
     } else if (r.emlString) {
-      // Variable definition
       vars[r.defName] = r.emlString;
       varUsesX[r.defName] = r.astUsesX;
     }
@@ -333,7 +480,6 @@ function buildDefs(upToIndex) {
   return { vars, funcs, varUsesX, funcUsesX };
 }
 
-// Check if AST references x, excluding specified param names
 function mathUsesXExcluding(node, excludeNames) {
   if (!node) return false;
   if (node.t === "name") {
@@ -349,7 +495,7 @@ function mathUsesXExcluding(node, excludeNames) {
 function recompileAll() {
   for (let i = 0; i < state.rows.length; i++) {
     const r = state.rows[i];
-    if (r.source === "eml") continue; // EML-source rows aren't recompiled from math
+    if (r.source === "eml") continue;
     recompileRow(r, i);
   }
 }
@@ -370,7 +516,6 @@ function recompileRow(r, index) {
     const lhs = parsed.lhs;
     const ast = parsed.expr;
 
-    // Store definition info
     if (lhs) {
       r.defName = lhs.name;
       r.defArgs = lhs.args;
@@ -381,10 +526,15 @@ function recompileRow(r, index) {
     const defs = buildDefs(idx);
     r.astUsesX = mathUsesX(ast, defs);
 
+    // Function definitions with parameters can't be compiled standalone —
+    // their body references formal params that only resolve at call sites.
+    if (r.defArgs && r.defArgs.length > 0) {
+      return;
+    }
+
     const emlString = compileToEML(ast, defs);
     r.emlString = emlString;
     r.emlNode = parseEML(emlString);
-    // Optimize: pre-evaluate constant subtrees
     r.optimizedNode = optimizeEML(r.emlNode);
     if (!r.astUsesX) {
       r.value = evalEML(r.optimizedNode, {});
@@ -440,7 +590,6 @@ function onEmlEdited() {
     r.defBodyAst = null;
     if (!r.astUsesX) r.value = evalEML(r.optimizedNode, {});
     else r.value = null;
-    // Reflect to input
     const card = els.rows.querySelector(`.row[data-id="${r.id}"]`);
     if (card) {
       card.querySelector(".row-input").value = `<EML expression (${countTokens(node)} tokens)>`;
@@ -484,7 +633,174 @@ function redraw() {
       };
     });
   graph.setTraces(traces);
+  updateSpecialPoints();
   refreshEmlPanel();
+}
+
+// ---- Special points (roots, peaks, troughs, intersections) ----
+
+function bisect(fn, a, b, iters) {
+  let fa, fb;
+  try { fa = fn(a); } catch { return null; }
+  try { fb = fn(b); } catch { return null; }
+  if (!isFinite(fa) || !isFinite(fb)) return null;
+  for (let i = 0; i < iters; i++) {
+    let mid = (a + b) / 2;
+    // Nudge away from exactly 0 to avoid EML log(0) failures
+    if (mid === 0) mid = 1e-15;
+    let fm;
+    try { fm = fn(mid); } catch { return null; }
+    if (!isFinite(fm)) return null;
+    if (fa * fm <= 0) { b = mid; fb = fm; }
+    else { a = mid; fa = fm; }
+  }
+  return (a + b) / 2;
+}
+
+function refineExtremum(fn, a, b, isPeak) {
+  const gr = 0.6180339887;
+  let c = b - gr * (b - a);
+  let d = a + gr * (b - a);
+  for (let i = 0; i < 40; i++) {
+    let fc, fd;
+    try { fc = fn(c); fd = fn(d); } catch { break; }
+    if (!isFinite(fc) || !isFinite(fd)) break;
+    if (isPeak ? fc > fd : fc < fd) {
+      b = d;
+    } else {
+      a = c;
+    }
+    c = b - gr * (b - a);
+    d = a + gr * (b - a);
+  }
+  return (a + b) / 2;
+}
+
+function dedup(points, threshold) {
+  const result = [];
+  for (const p of points) {
+    let isDup = false;
+    for (const q of result) {
+      if (Math.hypot(p.x - q.x, p.y - q.y) < threshold) {
+        isDup = true;
+        break;
+      }
+    }
+    if (!isDup) result.push(p);
+  }
+  return result;
+}
+
+function updateSpecialPoints() {
+  if (!graph) return;
+  const view = graph.view;
+  const traces = graph.traces;
+  const points = [];
+  const margin = (view.xMax - view.xMin) * 0.03;
+  const searchXMin = view.xMin - margin;
+  const searchXMax = view.xMax + margin;
+  const N = 800;
+  const dx = (searchXMax - searchXMin) / N;
+  const ySpan = view.yMax - view.yMin;
+  const zeroThresh = Math.max(1e-10, ySpan * 1e-7);
+
+  for (const tr of traces) {
+    if (!tr.visible) continue;
+
+    // Offset grid by half a step so samples never land on exact zeros
+    // (EML evaluation fails at x=0 due to log(0) in multiplication)
+    const halfDx = dx * 0.5;
+    const samples = new Array(N + 1);
+    for (let i = 0; i <= N; i++) {
+      const x = searchXMin + halfDx + i * dx;
+      try { samples[i] = tr.sampler(x); } catch { samples[i] = NaN; }
+    }
+
+    const sampleX = (i) => searchXMin + halfDx + i * dx;
+
+    // Roots — sign changes
+    for (let i = 0; i < N; i++) {
+      const ya = samples[i], yb = samples[i + 1];
+      if (!isFinite(ya) || !isFinite(yb)) continue;
+      if (ya * yb > 0) continue;
+      if (Math.abs(ya - yb) > ySpan * 0.5) continue;
+      const xa = sampleX(i);
+      const xb = sampleX(i + 1);
+      const rx = bisect(tr.sampler, xa, xb, 50);
+      if (rx === null) continue;
+      let ry;
+      try { ry = tr.sampler(rx); } catch { continue; }
+      if (Math.abs(ry) < zeroThresh) {
+        points.push({ x: rx, y: 0, color: tr.color, type: "root", label: `(${fmtReadout(rx)}, 0)` });
+      }
+    }
+
+    // Roots — direct near-zero samples
+    for (let i = 0; i <= N; i++) {
+      if (Math.abs(samples[i]) < zeroThresh) {
+        const x = sampleX(i);
+        points.push({ x, y: 0, color: tr.color, type: "root", label: `(${fmtReadout(x)}, 0)` });
+      }
+    }
+
+    // Peaks and troughs
+    for (let i = 1; i < N; i++) {
+      const yp = samples[i - 1], yc = samples[i], yn = samples[i + 1];
+      if (!isFinite(yp) || !isFinite(yc) || !isFinite(yn)) continue;
+      const d1 = yc - yp, d2 = yn - yc;
+      if (d1 > 0 && d2 < 0) {
+        const xa = sampleX(i - 1);
+        const xb = sampleX(i + 1);
+        const rx = refineExtremum(tr.sampler, xa, xb, true);
+        let ry;
+        try { ry = tr.sampler(rx); } catch { continue; }
+        if (isFinite(ry) && ry >= view.yMin - ySpan * 0.05 && ry <= view.yMax + ySpan * 0.05) {
+          points.push({ x: rx, y: ry, color: tr.color, type: "peak", label: `(${fmtReadout(rx)}, ${fmtReadout(ry)})` });
+        }
+      } else if (d1 < 0 && d2 > 0) {
+        const xa = sampleX(i - 1);
+        const xb = sampleX(i + 1);
+        const rx = refineExtremum(tr.sampler, xa, xb, false);
+        let ry;
+        try { ry = tr.sampler(rx); } catch { continue; }
+        if (isFinite(ry) && ry >= view.yMin - ySpan * 0.05 && ry <= view.yMax + ySpan * 0.05) {
+          points.push({ x: rx, y: ry, color: tr.color, type: "trough", label: `(${fmtReadout(rx)}, ${fmtReadout(ry)})` });
+        }
+      }
+    }
+  }
+
+  // Intersections between pairs
+  for (let i = 0; i < traces.length; i++) {
+    for (let j = i + 1; j < traces.length; j++) {
+      if (!traces[i].visible || !traces[j].visible) continue;
+      const diff = (x) => {
+        const a = traces[i].sampler(x);
+        const b = traces[j].sampler(x);
+        return a - b;
+      };
+      const halfDxI = dx * 0.5;
+      for (let k = 0; k < N; k++) {
+        const xa = searchXMin + halfDxI + k * dx;
+        const xb = searchXMin + halfDxI + (k + 1) * dx;
+        let da, db;
+        try { da = diff(xa); db = diff(xb); } catch { continue; }
+        if (!isFinite(da) || !isFinite(db)) continue;
+        if (da * db > 0) continue;
+        if (Math.abs(da - db) > ySpan * 0.5) continue;
+        const rx = bisect(diff, xa, xb, 50);
+        if (rx === null) continue;
+        let ry;
+        try { ry = traces[i].sampler(rx); } catch { continue; }
+        if (isFinite(ry) && ry >= view.yMin - ySpan * 0.05 && ry <= view.yMax + ySpan * 0.05) {
+          points.push({ x: rx, y: ry, color: "#ffffff", type: "intersection", label: `(${fmtReadout(rx)}, ${fmtReadout(ry)})` });
+        }
+      }
+    }
+  }
+
+  const xThreshold = (view.xMax - view.xMin) * 0.008;
+  graph.setSpecialPoints(dedup(points, xThreshold));
 }
 
 // ---- Style popover (long-press the chip) -----
@@ -494,6 +810,7 @@ function closeStylePopover() {
     openPopover.remove();
     openPopover = null;
     document.removeEventListener("mousedown", onDocMousedown, true);
+    document.removeEventListener("touchstart", onDocMousedown, true);
   }
 }
 function onDocMousedown(e) {
@@ -504,7 +821,6 @@ function openStylePopover(anchor, r) {
   const pop = document.createElement("div");
   pop.className = "color-popover";
 
-  // Color swatches
   const swatchLabel = document.createElement("div");
   swatchLabel.className = "popover-label";
   swatchLabel.textContent = "Color";
@@ -526,7 +842,6 @@ function openStylePopover(anchor, r) {
   }
   pop.appendChild(swatches);
 
-  // Thickness
   const thickLabel = document.createElement("div");
   thickLabel.className = "popover-label";
   thickLabel.textContent = "Thickness";
@@ -553,7 +868,6 @@ function openStylePopover(anchor, r) {
   thickRow.appendChild(thickVal);
   pop.appendChild(thickRow);
 
-  // Line style
   const styleLabel = document.createElement("div");
   styleLabel.className = "popover-label";
   styleLabel.textContent = "Style";
@@ -576,7 +890,6 @@ function openStylePopover(anchor, r) {
   }
   pop.appendChild(styleRow);
 
-  // Opacity
   const opacLabel = document.createElement("div");
   opacLabel.className = "popover-label";
   opacLabel.textContent = "Opacity";
@@ -607,19 +920,19 @@ function openStylePopover(anchor, r) {
   const rect = anchor.getBoundingClientRect();
   pop.style.left = `${rect.left}px`;
   pop.style.top = `${rect.bottom + 6}px`;
-  // Clamp to viewport
   const pr = pop.getBoundingClientRect();
   if (pr.right > window.innerWidth - 8) {
     pop.style.left = `${window.innerWidth - pr.width - 8}px`;
   }
   openPopover = pop;
-  setTimeout(() => document.addEventListener("mousedown", onDocMousedown, true), 0);
+  setTimeout(() => {
+    document.addEventListener("mousedown", onDocMousedown, true);
+    document.addEventListener("touchstart", onDocMousedown, true);
+  }, 0);
 }
 
 // ---- TeX emission for the math preview --------------------------------
 function astToTex(n, ctx = 0) {
-  // ctx: 0 = top, 1 = add/sub operand, 2 = mul/div operand, 3 = pow base
-  const P = { add: 1, sub: 1, mul: 2, div: 2, neg: 2, pow: 3 };
   switch (n.t) {
     case "num": {
       if (Number.isInteger(n.v)) return String(n.v);
@@ -643,7 +956,6 @@ function astToTex(n, ctx = 0) {
       return ctx >= 2 ? `\\left(${s}\\right)` : s;
     }
     case "mul": {
-      // Use \cdot only if the right side starts with a digit; otherwise juxtapose.
       const L = astToTex(n.l, 2);
       const R = astToTex(n.r, 2);
       const needsDot = /^[\d]/.test(stripTex(R));
@@ -654,7 +966,6 @@ function astToTex(n, ctx = 0) {
       return `\\frac{${astToTex(n.l, 0)}}{${astToTex(n.r, 0)}}`;
     }
     case "pow": {
-      // sqrt special-case if exponent is literal 1/2
       if (n.r.t === "div" && n.r.l.t === "num" && n.r.l.v === 1 && n.r.r.t === "num" && n.r.r.v === 2) {
         return `\\sqrt{${astToTex(n.l, 0)}}`;
       }
