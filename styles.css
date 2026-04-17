@@ -178,16 +178,57 @@ main {
 }
 .swatch:hover { transform: scale(1.12); }
 .swatch.active { border-color: var(--text); box-shadow: 0 0 0 2px var(--panel); }
-.popover-toggle {
-  background: var(--panel-2);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 12px;
+.chip-hidden {
+  opacity: 0.4;
+}
+
+.popover-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.popover-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.popover-slider {
+  flex: 1;
+  accent-color: var(--accent);
+  height: 4px;
   cursor: pointer;
 }
-.popover-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+.popover-slider-val {
+  font-size: 11px;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  min-width: 32px;
+  text-align: right;
+}
+
+.popover-style-row {
+  display: flex;
+  gap: 4px;
+}
+
+.popover-style-btn {
+  flex: 1;
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: border-color 0.08s, color 0.08s;
+}
+.popover-style-btn:hover { border-color: var(--accent); color: var(--accent); }
+.popover-style-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(110, 168, 254, 0.1); }
 
 .row-input {
   background: transparent;

@@ -160,32 +160,62 @@ class Graph {
     // Traces
     for (const tr of this.traces) {
       if (!tr.visible) continue;
+      const alpha = tr.opacity !== undefined ? tr.opacity : 1;
+      ctx.globalAlpha = alpha;
       ctx.strokeStyle = tr.color;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      let pen = false;
-      let lastY = null;
-      const N = Math.floor(this.w);
-      for (let i = 0; i <= N; i++) {
-        const x = xMin + (i / N) * (xMax - xMin);
-        let y;
-        try { y = tr.sampler(x); } catch { y = NaN; }
-        if (!isFinite(y)) { pen = false; lastY = null; continue; }
-        const px = this.xToPx(x);
-        const py = this.yToPx(y);
-        // Break on giant jumps (asymptotes)
-        if (pen && lastY !== null) {
-          const dy = Math.abs(y - lastY);
-          const spanY = yMax - yMin;
-          if (dy > spanY * 0.75 && Math.sign(y) !== Math.sign(lastY)) {
-            pen = false;
-          }
-        }
-        if (!pen) { ctx.moveTo(px, py); pen = true; }
-        else ctx.lineTo(px, py);
-        lastY = y;
+      ctx.fillStyle = tr.color;
+      ctx.lineWidth = tr.thickness || 2;
+
+      if (tr.lineStyle === "dashed") {
+        ctx.setLineDash([8, 5]);
+      } else {
+        ctx.setLineDash([]);
       }
-      ctx.stroke();
+
+      const N = Math.floor(this.w);
+
+      if (tr.lineStyle === "points") {
+        const r = Math.max(1.5, (tr.thickness || 2) * 0.8);
+        for (let i = 0; i <= N; i += 2) { // skip every other for perf
+          const x = xMin + (i / N) * (xMax - xMin);
+          let y;
+          try { y = tr.sampler(x); } catch { y = NaN; }
+          if (!isFinite(y)) continue;
+          const px = this.xToPx(x);
+          const py = this.yToPx(y);
+          if (py < -10 || py > this.h + 10) continue;
+          ctx.beginPath();
+          ctx.arc(px, py, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else {
+        ctx.beginPath();
+        let pen = false;
+        let lastY = null;
+        for (let i = 0; i <= N; i++) {
+          const x = xMin + (i / N) * (xMax - xMin);
+          let y;
+          try { y = tr.sampler(x); } catch { y = NaN; }
+          if (!isFinite(y)) { pen = false; lastY = null; continue; }
+          const px = this.xToPx(x);
+          const py = this.yToPx(y);
+          // Break on giant jumps (asymptotes)
+          if (pen && lastY !== null) {
+            const dy = Math.abs(y - lastY);
+            const spanY = yMax - yMin;
+            if (dy > spanY * 0.75 && Math.sign(y) !== Math.sign(lastY)) {
+              pen = false;
+            }
+          }
+          if (!pen) { ctx.moveTo(px, py); pen = true; }
+          else ctx.lineTo(px, py);
+          lastY = y;
+        }
+        ctx.stroke();
+      }
+
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
     }
 
     // Hover: snap to nearest visible trace if close, else crosshair.

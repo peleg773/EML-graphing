@@ -68,7 +68,8 @@ function evalEML(node, env = {}) {
   function visit(n) {
     if (memo.has(n)) return memo.get(n);
     let v;
-    if (n.sym === "1") v = CONE;
+    if (n.sym === "const") v = n.val;
+    else if (n.sym === "1") v = CONE;
     else if (n.sym === "x") v = x;
     else {
       const a = visit(n.l);
@@ -83,6 +84,20 @@ function evalEML(node, env = {}) {
     return v;
   }
   return visit(node);
+}
+
+// Pre-evaluate constant subtrees (those not depending on x) so they are
+// computed once instead of per-pixel during graphing.
+function optimizeEML(node) {
+  if (node.sym === "1" || node.sym === "x" || node.sym === "const") return node;
+  const l = optimizeEML(node.l);
+  const r = optimizeEML(node.r);
+  const opt = { sym: "E", l, r };
+  if (!usesX(opt)) {
+    const val = evalEML(opt, {});
+    return { sym: "const", val };
+  }
+  return opt;
 }
 
 // Convenience for graphing: evaluate a real sample, filter out non-real results.

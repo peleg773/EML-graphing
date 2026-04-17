@@ -1,7 +1,7 @@
 const PALETTE = ["#6ea8fe", "#ff8fa3", "#7ee787", "#f2cc60", "#c4a7e7", "#76e4d8", "#ffb38a"];
 
 const state = {
-  rows: [],       // { id, text, color, visible, error, emlString, emlNode, astUsesX, value, source: 'math'|'eml' }
+  rows: [],       // { id, text, color, visible, error, emlString, emlNode, optimizedNode, astUsesX, value, source, defName, defArgs, defBodyAst, thickness, lineStyle, opacity }
   selectedId: null,
   style: "E",     // "E" or "EML"
   dark: true,
@@ -80,14 +80,21 @@ function addRow(text) {
     error: null,
     emlString: null,
     emlNode: null,
+    optimizedNode: null,
     astUsesX: false,
     value: null,
     source: "math",
+    defName: null,
+    defArgs: null,
+    defBodyAst: null,
+    thickness: 2,
+    lineStyle: "line",
+    opacity: 1,
   };
   state.rows.push(row);
   state.selectedId = id;
+  recompileAll();
   renderRows();
-  recompileRow(row);
   redraw();
   // Auto-focus the input of the newly added row.
   const newCard = els.rows.querySelector(`.row[data-id="${id}"]`);
@@ -98,6 +105,7 @@ function addRow(text) {
 function deleteRow(id) {
   state.rows = state.rows.filter((r) => r.id !== id);
   if (state.selectedId === id) state.selectedId = state.rows.length ? state.rows[0].id : null;
+  recompileAll();
   renderRows();
   redraw();
 }
@@ -125,10 +133,35 @@ function renderRows() {
     chip.className = "chip";
     chip.style.background = r.visible ? r.color : "transparent";
     chip.style.borderColor = r.color;
-    chip.title = "Change color / toggle visibility";
+    if (!r.visible) chip.classList.add("chip-hidden");
+    chip.title = "Click to hide/show · Long-press for style options";
+
+    // Short click = toggle visibility, long press = open popover
+    let pressTimer = null;
+    let didLongPress = false;
+    chip.addEventListener("mousedown", (e) => {
+      e.stopPropagation();
+      didLongPress = false;
+      pressTimer = setTimeout(() => {
+        didLongPress = true;
+        openStylePopover(chip, r);
+      }, 400);
+    });
+    chip.addEventListener("mouseup", (e) => {
+      e.stopPropagation();
+      clearTimeout(pressTimer);
+      if (!didLongPress) {
+        r.visible = !r.visible;
+        renderRows();
+        redraw();
+      }
+    });
+    chip.addEventListener("mouseleave", () => {
+      clearTimeout(pressTimer);
+    });
+    // Prevent the default click from firing after long press
     chip.addEventListener("click", (e) => {
       e.stopPropagation();
-      openColorPopover(chip, r);
     });
 
     const input = document.createElement("input");
@@ -139,16 +172,22 @@ function renderRows() {
     } else {
       input.value = r.text;
     }
-    input.placeholder = "e.g. sin(x) + 1";
+    input.placeholder = "e.g. sin(x) + 1  or  a = 3";
     input.spellcheck = false;
     input.autocomplete = "off";
     input.addEventListener("input", () => {
       r.text = input.value;
       r.source = "math";
-      recompileRow(r);
+      recompileAll();
       redraw();
-      updateRowBadge(card, r);
-      updateRowPreview(card, r);
+      // Update badges/previews for all cards since definitions may affect others
+      for (const card2 of els.rows.querySelectorAll(".row")) {
+        const r2 = state.rows.find(rr => rr.id === Number(card2.dataset.id));
+        if (r2) {
+          updateRowBadge(card2, r2);
+          updateRowPreview(card2, r2);
+        }
+      }
     });
     input.addEventListener("dblclick", () => {
       if (input.disabled) {
@@ -171,18 +210,13 @@ function renderRows() {
     del.addEventListener("click", (e) => { e.stopPropagation(); deleteRow(r.id); });
 
     card.addEventListener("mousedown", (e) => {
-      // Clicking anywhere on the row card selects it and focuses the input,
-      // unless the click was on an interactive child (chip, delete button).
       if (e.target.closest("button")) return;
       state.selectedId = r.id;
       markSelected();
       refreshEmlPanel();
       const inp = card.querySelector(".row-input");
       if (!inp || inp.disabled) return;
-      // If the click landed on the input itself, let the browser position the
-      // caret at the clicked character naturally — don't preventDefault.
       if (e.target === inp) return;
-      // Clicked on the card background: focus the input at the end.
       e.preventDefault();
       inp.focus();
       const len = inp.value.length;
@@ -221,8 +255,8 @@ function updateRowPreview(card, r) {
   if (!preview) return;
   if (r.source === "eml" || !r.text.trim() || r.error) { preview.innerHTML = ""; return; }
   try {
-    const ast = parseMath(r.text);
-    const tex = astToTex(ast);
+    const parsed = parseMath(r.text);
+    const tex = astToTex(parsed.expr);
     preview.innerHTML = `\\(\\displaystyle ${tex}\\)`;
     preview.dataset.tex = tex;
     if (window.__mathjaxReady && window.MathJax && window.MathJax.typesetPromise) {
@@ -248,6 +282,17 @@ function updateRowBadge(card, r) {
     badge.textContent = r.error;
     return;
   }
+  if (r.defName && !r.astUsesX && !r.defArgs) {
+    badge.classList.add("value");
+    const label = r.value !== null ? `${r.defName} = ${cToString(r.value, 12)}` : `defines ${r.defName}`;
+    badge.textContent = label;
+    return;
+  }
+  if (r.defName && r.defArgs) {
+    badge.classList.add("eml-mode");
+    badge.textContent = `defines ${r.defName}(${r.defArgs.join(", ")})`;
+    return;
+  }
   if (r.source === "eml") {
     badge.classList.add("eml-mode");
     badge.textContent = "EML source — edit it on the right";
@@ -265,21 +310,84 @@ function updateRowBadge(card, r) {
   }
 }
 
-function recompileRow(r) {
+// Build user definitions from rows above the given row index.
+function buildDefs(upToIndex) {
+  const vars = {};
+  const funcs = {};
+  const varUsesX = {};
+  const funcUsesX = {};
+  for (let i = 0; i < upToIndex; i++) {
+    const r = state.rows[i];
+    if (!r.defName || r.error) continue;
+    if (r.defArgs) {
+      // Function definition
+      funcs[r.defName] = { params: r.defArgs, bodyAst: r.defBodyAst };
+      // A user function "uses x" if its body references x beyond its own params
+      funcUsesX[r.defName] = mathUsesXExcluding(r.defBodyAst, r.defArgs);
+    } else if (r.emlString) {
+      // Variable definition
+      vars[r.defName] = r.emlString;
+      varUsesX[r.defName] = r.astUsesX;
+    }
+  }
+  return { vars, funcs, varUsesX, funcUsesX };
+}
+
+// Check if AST references x, excluding specified param names
+function mathUsesXExcluding(node, excludeNames) {
+  if (!node) return false;
+  if (node.t === "name") {
+    if (excludeNames.includes(node.name)) return false;
+    return node.name === "x";
+  }
+  if (node.t === "call") return node.args.some(a => mathUsesXExcluding(a, excludeNames));
+  if (node.t === "num") return false;
+  if (node.t === "neg") return mathUsesXExcluding(node.x, excludeNames);
+  return mathUsesXExcluding(node.l, excludeNames) || mathUsesXExcluding(node.r, excludeNames);
+}
+
+function recompileAll() {
+  for (let i = 0; i < state.rows.length; i++) {
+    const r = state.rows[i];
+    if (r.source === "eml") continue; // EML-source rows aren't recompiled from math
+    recompileRow(r, i);
+  }
+}
+
+function recompileRow(r, index) {
   r.error = null;
   r.emlString = null;
   r.emlNode = null;
+  r.optimizedNode = null;
   r.astUsesX = false;
   r.value = null;
+  r.defName = null;
+  r.defArgs = null;
+  r.defBodyAst = null;
   if (!r.text.trim()) return;
   try {
-    const ast = parseMath(r.text);
-    r.astUsesX = mathUsesX(ast);
-    const emlString = compileToEML(ast);
+    const parsed = parseMath(r.text);
+    const lhs = parsed.lhs;
+    const ast = parsed.expr;
+
+    // Store definition info
+    if (lhs) {
+      r.defName = lhs.name;
+      r.defArgs = lhs.args;
+      r.defBodyAst = ast;
+    }
+
+    const idx = index !== undefined ? index : state.rows.indexOf(r);
+    const defs = buildDefs(idx);
+    r.astUsesX = mathUsesX(ast, defs);
+
+    const emlString = compileToEML(ast, defs);
     r.emlString = emlString;
     r.emlNode = parseEML(emlString);
+    // Optimize: pre-evaluate constant subtrees
+    r.optimizedNode = optimizeEML(r.emlNode);
     if (!r.astUsesX) {
-      r.value = evalEML(r.emlNode, {});
+      r.value = evalEML(r.optimizedNode, {});
     }
   } catch (e) {
     r.error = e.message;
@@ -324,9 +432,13 @@ function onEmlEdited() {
     r.source = "eml";
     r.emlString = renderEML(node, "E");
     r.emlNode = node;
+    r.optimizedNode = optimizeEML(node);
     r.astUsesX = usesX(node);
     r.error = null;
-    if (!r.astUsesX) r.value = evalEML(node, {});
+    r.defName = null;
+    r.defArgs = null;
+    r.defBodyAst = null;
+    if (!r.astUsesX) r.value = evalEML(r.optimizedNode, {});
     else r.value = null;
     // Reflect to input
     const card = els.rows.querySelector(`.row[data-id="${r.id}"]`);
@@ -359,19 +471,25 @@ function toggleTheme() {
 
 function redraw() {
   const traces = state.rows
-    .filter((r) => r.visible && r.emlNode && (r.astUsesX || usesX(r.emlNode)))
-    .map((r) => ({
-      color: r.color,
-      visible: r.visible,
-      sampler: (x) => evalRealAt(r.emlNode, x),
-    }));
+    .filter((r) => r.visible && (r.optimizedNode || r.emlNode) && (r.astUsesX || usesX(r.emlNode)))
+    .map((r) => {
+      const node = r.optimizedNode || r.emlNode;
+      return {
+        color: r.color,
+        visible: r.visible,
+        thickness: r.thickness || 2,
+        lineStyle: r.lineStyle || "line",
+        opacity: r.opacity !== undefined ? r.opacity : 1,
+        sampler: (x) => evalRealAt(node, x),
+      };
+    });
   graph.setTraces(traces);
   refreshEmlPanel();
 }
 
-// ---- Color popover (click the chip to change color or hide/show) -----
+// ---- Style popover (long-press the chip) -----
 let openPopover = null;
-function closeColorPopover() {
+function closeStylePopover() {
   if (openPopover) {
     openPopover.remove();
     openPopover = null;
@@ -379,12 +497,18 @@ function closeColorPopover() {
   }
 }
 function onDocMousedown(e) {
-  if (openPopover && !openPopover.contains(e.target)) closeColorPopover();
+  if (openPopover && !openPopover.contains(e.target)) closeStylePopover();
 }
-function openColorPopover(anchor, r) {
-  if (openPopover) { closeColorPopover(); return; }
+function openStylePopover(anchor, r) {
+  if (openPopover) { closeStylePopover(); return; }
   const pop = document.createElement("div");
   pop.className = "color-popover";
+
+  // Color swatches
+  const swatchLabel = document.createElement("div");
+  swatchLabel.className = "popover-label";
+  swatchLabel.textContent = "Color";
+  pop.appendChild(swatchLabel);
 
   const swatches = document.createElement("div");
   swatches.className = "swatches";
@@ -395,8 +519,6 @@ function openColorPopover(anchor, r) {
     sw.addEventListener("click", (e) => {
       e.stopPropagation();
       r.color = c;
-      r.visible = true;
-      closeColorPopover();
       renderRows();
       redraw();
     });
@@ -404,17 +526,82 @@ function openColorPopover(anchor, r) {
   }
   pop.appendChild(swatches);
 
-  const toggle = document.createElement("button");
-  toggle.className = "popover-toggle";
-  toggle.textContent = r.visible ? "Hide" : "Show";
-  toggle.addEventListener("click", (e) => {
-    e.stopPropagation();
-    r.visible = !r.visible;
-    closeColorPopover();
-    renderRows();
+  // Thickness
+  const thickLabel = document.createElement("div");
+  thickLabel.className = "popover-label";
+  thickLabel.textContent = "Thickness";
+  pop.appendChild(thickLabel);
+
+  const thickRow = document.createElement("div");
+  thickRow.className = "popover-slider-row";
+  const thickSlider = document.createElement("input");
+  thickSlider.type = "range";
+  thickSlider.min = "0.5";
+  thickSlider.max = "6";
+  thickSlider.step = "0.5";
+  thickSlider.value = r.thickness || 2;
+  thickSlider.className = "popover-slider";
+  const thickVal = document.createElement("span");
+  thickVal.className = "popover-slider-val";
+  thickVal.textContent = r.thickness || 2;
+  thickSlider.addEventListener("input", () => {
+    r.thickness = Number(thickSlider.value);
+    thickVal.textContent = thickSlider.value;
     redraw();
   });
-  pop.appendChild(toggle);
+  thickRow.appendChild(thickSlider);
+  thickRow.appendChild(thickVal);
+  pop.appendChild(thickRow);
+
+  // Line style
+  const styleLabel = document.createElement("div");
+  styleLabel.className = "popover-label";
+  styleLabel.textContent = "Style";
+  pop.appendChild(styleLabel);
+
+  const styleRow = document.createElement("div");
+  styleRow.className = "popover-style-row";
+  for (const [val, label] of [["line", "Line"], ["dashed", "Dashed"], ["points", "Points"]]) {
+    const btn = document.createElement("button");
+    btn.className = "popover-style-btn" + (r.lineStyle === val ? " active" : "");
+    btn.textContent = label;
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      r.lineStyle = val;
+      styleRow.querySelectorAll(".popover-style-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      redraw();
+    });
+    styleRow.appendChild(btn);
+  }
+  pop.appendChild(styleRow);
+
+  // Opacity
+  const opacLabel = document.createElement("div");
+  opacLabel.className = "popover-label";
+  opacLabel.textContent = "Opacity";
+  pop.appendChild(opacLabel);
+
+  const opacRow = document.createElement("div");
+  opacRow.className = "popover-slider-row";
+  const opacSlider = document.createElement("input");
+  opacSlider.type = "range";
+  opacSlider.min = "0.1";
+  opacSlider.max = "1";
+  opacSlider.step = "0.05";
+  opacSlider.value = r.opacity !== undefined ? r.opacity : 1;
+  opacSlider.className = "popover-slider";
+  const opacVal = document.createElement("span");
+  opacVal.className = "popover-slider-val";
+  opacVal.textContent = Math.round((r.opacity !== undefined ? r.opacity : 1) * 100) + "%";
+  opacSlider.addEventListener("input", () => {
+    r.opacity = Number(opacSlider.value);
+    opacVal.textContent = Math.round(r.opacity * 100) + "%";
+    redraw();
+  });
+  opacRow.appendChild(opacSlider);
+  opacRow.appendChild(opacVal);
+  pop.appendChild(opacRow);
 
   document.body.appendChild(pop);
   const rect = anchor.getBoundingClientRect();

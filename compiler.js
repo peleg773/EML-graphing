@@ -80,9 +80,9 @@ const emlConstE = () => emlExp("1");
 const emlConstI = () => {
   const minusOne = emlNeg("1");
   const two = emlInt(2);
-  return emlNeg(emlExp(emlDiv(emlLog(minusOne), two))); // I = -Exp[Log[-1]/2]
+  return emlExp(emlDiv(emlLog(minusOne), two)); // I = Exp[Log[-1]/2] = exp(i*pi/2) = i
 };
-const emlConstPi = () => emlMul(emlConstI(), emlLog(emlNeg("1"))); // Pi = I*Log[-1]
+const emlConstPi = () => emlMul(emlNeg(emlConstI()), emlLog(emlNeg("1"))); // Pi = -I*Log[-1] = -i*(i*pi) = pi
 const emlConstPhi = () => {
   const sqrt5 = emlPow(emlInt(5), emlRational(1, 2));
   const num = emlAdd("1", sqrt5);
@@ -116,32 +116,46 @@ class Parser {
 
   parse() {
     this.skip();
-    // Handle LHS of `=`: y = expr, f(x) = expr
+    let lhs = null;
     const save = this.i;
     const name = this.tryName();
     if (name !== null) {
       this.skip();
       if (this.match("(")) {
-        // f(x) = ...  — skip past the arg list and '='
-        const argStart = this.i;
-        let depth = 1;
-        while (!this.eof() && depth > 0) {
-          const c = this.src[this.i++];
-          if (c === "(") depth++;
-          else if (c === ")") depth--;
-        }
+        // f(x) = ... or f(x, y) = ...
+        const args = [];
         this.skip();
-        if (!this.match("=")) { this.i = save; }
+        if (this.peek() !== ")") {
+          const a = this.tryName();
+          if (a) args.push(a);
+          while (this.match(",")) {
+            this.skip();
+            const a2 = this.tryName();
+            if (a2) args.push(a2);
+          }
+        }
+        if (this.match(")")) {
+          this.skip();
+          if (this.match("=")) {
+            lhs = { name, args };
+          } else {
+            this.i = save;
+          }
+        } else {
+          this.i = save;
+        }
       } else if (this.match("=")) {
-        // y = ...
+        lhs = { name, args: null };
       } else {
         this.i = save;
       }
+    } else {
+      this.i = save;
     }
     const e = this.expr();
     this.skip();
     if (!this.eof()) this.err("unexpected trailing input");
-    return e;
+    return { lhs, expr: e };
   }
 
   tryName() {
@@ -235,7 +249,8 @@ class Parser {
 }
 
 function parseMath(text) {
-  return new Parser(text).parse();
+  const result = new Parser(text).parse();
+  return result;
 }
 
 // ============================================================
@@ -254,11 +269,11 @@ const KNOWN_CONST = {
   tau: () => emlMul(emlInt(2), emlConstPi()),
 };
 
-function compileToEML(node) {
-  return emit(node);
+function compileToEML(node, defs) {
+  return emit(node, defs || {});
 }
 
-function emit(n) {
+function emit(n, defs) {
   switch (n.t) {
     case "num": {
       if (Number.isInteger(n.v)) return emlInt(n.v);
@@ -280,26 +295,38 @@ function emit(n) {
     }
     case "name": {
       if (n.name === "x") return n.name;
+      // Check user-defined variables first
+      if (defs.vars && defs.vars[n.name] !== undefined) return defs.vars[n.name];
       if (n.name === "E") return emlConstE(); // treat bare E as Euler's
       const cfn = KNOWN_CONST[n.name];
       if (cfn) return cfn();
       throw new Error(`unknown name: ${n.name}`);
     }
-    case "neg": return emlNeg(emit(n.x));
-    case "add": return emlAdd(emit(n.l), emit(n.r));
-    case "sub": return emlSub(emit(n.l), emit(n.r));
-    case "mul": return emlMul(emit(n.l), emit(n.r));
-    case "div": return emlDiv(emit(n.l), emit(n.r));
-    case "pow": return emlPow(emit(n.l), emit(n.r));
-    case "call": return emitCall(n);
+    case "neg": return emlNeg(emit(n.x, defs));
+    case "add": return emlAdd(emit(n.l, defs), emit(n.r, defs));
+    case "sub": return emlSub(emit(n.l, defs), emit(n.r, defs));
+    case "mul": return emlMul(emit(n.l, defs), emit(n.r, defs));
+    case "div": return emlDiv(emit(n.l, defs), emit(n.r, defs));
+    case "pow": return emlPow(emit(n.l, defs), emit(n.r, defs));
+    case "call": return emitCall(n, defs);
     default: throw new Error(`bad node: ${n.t}`);
   }
 }
 
-function emitCall(n) {
+function emitCall(n, defs) {
   const f = n.name;
   const a = n.args;
-  const E = emit;
+  // Check user-defined functions first
+  if (defs.funcs && defs.funcs[f]) {
+    const def = defs.funcs[f];
+    // Build a local defs with function params mapped to emitted args
+    const localVars = Object.assign({}, defs.vars || {});
+    for (let i = 0; i < def.params.length && i < a.length; i++) {
+      localVars[def.params[i]] = emit(a[i], defs);
+    }
+    return emit(def.bodyAst, { vars: localVars, funcs: defs.funcs });
+  }
+  const E = (node) => emit(node, defs);
   if (f === "exp" || f === "Exp") return emlExp(E(a[0]));
   if (f === "log" || f === "ln" || f === "Log" || f === "Ln") {
     if (a.length === 1) return emlLog(E(a[0]));
@@ -401,16 +428,25 @@ function emitCall(n) {
 
 // Public convenience: string in, EML string out.
 function compileMath(text) {
-  const ast = parseMath(text);
-  return compileToEML(ast);
+  const parsed = parseMath(text);
+  return compileToEML(parsed.expr);
 }
 
-// Detect if math AST references the variable x.
-function mathUsesX(node) {
+// Detect if math AST references the variable x (or user-defined names that depend on x).
+function mathUsesX(node, defs) {
   if (!node) return false;
-  if (node.t === "name") return node.name === "x";
-  if (node.t === "call") return node.args.some(mathUsesX);
+  if (node.t === "name") {
+    if (node.name === "x") return true;
+    // Check if user-defined variable depends on x
+    if (defs && defs.varUsesX && defs.varUsesX[node.name]) return true;
+    return false;
+  }
+  if (node.t === "call") {
+    // Check if user-defined function body uses x (beyond its params)
+    if (defs && defs.funcUsesX && defs.funcUsesX[node.name]) return true;
+    return node.args.some(a => mathUsesX(a, defs));
+  }
   if (node.t === "num") return false;
-  if (node.t === "neg") return mathUsesX(node.x);
-  return mathUsesX(node.l) || mathUsesX(node.r);
+  if (node.t === "neg") return mathUsesX(node.x, defs);
+  return mathUsesX(node.l, defs) || mathUsesX(node.r, defs);
 }
