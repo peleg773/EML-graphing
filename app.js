@@ -397,11 +397,25 @@ function updateRowPreview(card, r) {
   if (r.source === "eml" || !r.text.trim() || r.error) { preview.innerHTML = ""; return; }
   try {
     const parsed = parseMath(r.text);
-    const tex = astToTex(parsed.expr);
-    preview.innerHTML = `\\(\\displaystyle ${tex}\\)`;
+    const rhsTex = astToTex(parsed.expr);
+    const tex = parsed.lhs ? `${lhsToTex(parsed.lhs)} = ${rhsTex}` : rhsTex;
+    preview.innerHTML = "";
+
+    const math = document.createElement("span");
+    math.className = "preview-math";
+    math.innerHTML = `\\(\\displaystyle ${tex}\\)`;
+    preview.appendChild(math);
+
+    if (r.emlNode && !showsValueBadge(r)) {
+      const tok = document.createElement("span");
+      tok.className = "preview-tokens";
+      tok.textContent = `${countTokens(r.emlNode)} tokens`;
+      preview.appendChild(tok);
+    }
+
     preview.dataset.tex = tex;
     if (window.__mathjaxReady && window.MathJax && window.MathJax.typesetPromise) {
-      window.MathJax.typesetPromise([preview]).catch((e) => console.warn("MathJax typeset failed", e));
+      window.MathJax.typesetPromise([math]).catch((e) => console.warn("MathJax typeset failed", e));
     }
   } catch {
     preview.innerHTML = "";
@@ -410,7 +424,7 @@ function updateRowPreview(card, r) {
 
 function retypesetAllPreviews() {
   if (!window.MathJax || !window.MathJax.typesetPromise) return;
-  const nodes = document.querySelectorAll(".row-preview");
+  const nodes = document.querySelectorAll(".row-preview .preview-math");
   window.MathJax.typesetPromise(Array.from(nodes)).catch((e) => console.warn("MathJax retypeset failed", e));
 }
 window.retypesetAllPreviews = retypesetAllPreviews;
@@ -419,6 +433,11 @@ function setBadge(badge, cls, mainText, tokenNode) {
   badge.className = "row-badge";
   if (cls) badge.classList.add(cls);
   badge.innerHTML = "";
+  if (!mainText && !tokenNode) {
+    badge.style.display = "none";
+    return;
+  }
+  badge.style.display = "flex";
   const main = document.createElement("span");
   main.className = "badge-main";
   main.textContent = mainText;
@@ -431,6 +450,13 @@ function setBadge(badge, cls, mainText, tokenNode) {
   }
 }
 
+function showsValueBadge(r) {
+  if (r.error || !r.emlNode) return false;
+  if (r.defName && !r.astUsesX && !r.defArgs && r.value !== null) return true;
+  if (!r.astUsesX && r.value !== null && r.source !== "eml") return true;
+  return false;
+}
+
 function updateRowBadge(card, r) {
   const badge = card.querySelector(".row-badge");
   if (r.error) {
@@ -438,12 +464,12 @@ function updateRowBadge(card, r) {
     return;
   }
   if (r.defName && !r.astUsesX && !r.defArgs) {
-    const label = r.value !== null ? `${r.defName} = ${cToString(r.value, 12)}` : `defines ${r.defName}`;
+    const label = r.value !== null ? `${r.defName} = ${cToString(r.value, 12)}` : "";
     setBadge(badge, "value", label, r.emlNode);
     return;
   }
   if (r.defName && r.defArgs) {
-    setBadge(badge, "eml-mode", `defines ${r.defName}(${r.defArgs.join(", ")})`, null);
+    setBadge(badge, null, "", null);
     return;
   }
   if (r.source === "eml") {
@@ -454,11 +480,7 @@ function updateRowBadge(card, r) {
     setBadge(badge, "value", "= " + cToString(r.value, 12), r.emlNode);
     return;
   }
-  if (r.emlString) {
-    setBadge(badge, null, "", r.emlNode);
-  } else {
-    setBadge(badge, null, "", null);
-  }
+  setBadge(badge, null, "", null);
 }
 
 function buildDefs(upToIndex) {
@@ -520,23 +542,41 @@ function recompileRow(r, index) {
       r.defName = lhs.name;
       r.defArgs = lhs.args;
       r.defBodyAst = ast;
+      // In function definitions, x must be explicit as a formal parameter.
+      if (lhs.args && lhs.args.length > 0 && !lhs.args.includes("x") && mathUsesXExcluding(ast, lhs.args)) {
+        throw new Error(`x is undefined in ${lhs.name}(${lhs.args.join(", ")}); use the function parameter(s) instead`);
+      }
     }
 
     const idx = index !== undefined ? index : state.rows.indexOf(r);
     const defs = buildDefs(idx);
     r.astUsesX = mathUsesX(ast, defs);
 
-    // Function definitions with parameters can't be compiled standalone —
-    // their body references formal params that only resolve at call sites.
+    let compileDefs = defs;
+    let forceFunctionOfX = false;
+    // Single-argument function definitions can be graphed by binding their
+    // formal parameter to x in a graph-only compiled form.
     if (r.defArgs && r.defArgs.length > 0) {
-      return;
+      if (r.defArgs.length !== 1) {
+        return;
+      }
+      compileDefs = {
+        vars: Object.assign({}, defs.vars || {}),
+        funcs: defs.funcs,
+        varUsesX: defs.varUsesX,
+        funcUsesX: defs.funcUsesX,
+      };
+      compileDefs.vars[r.defArgs[0]] = "x";
+      forceFunctionOfX = true;
     }
 
-    const emlString = compileToEML(ast, defs);
+    const emlString = compileToEML(ast, compileDefs);
     r.emlString = emlString;
     r.emlNode = parseEML(emlString);
     r.optimizedNode = optimizeEML(r.emlNode);
-    if (!r.astUsesX) {
+    if (forceFunctionOfX) {
+      r.astUsesX = true;
+    } else if (!r.astUsesX) {
       r.value = evalEML(r.optimizedNode, {});
     }
   } catch (e) {
@@ -992,5 +1032,11 @@ function astToTex(n, ctx = 0) {
   return "";
 }
 function stripTex(s) { return s.replace(/^\\left\(|\\cdot|\\,|^\{|\}$/g, ""); }
+
+function lhsToTex(lhs) {
+  if (!lhs) return "";
+  if (lhs.args === null) return lhs.name;
+  return `${lhs.name}\\left(${lhs.args.join(",")}\\right)`;
+}
 
 window.addEventListener("DOMContentLoaded", init);

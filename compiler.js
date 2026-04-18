@@ -14,7 +14,12 @@ const emlSub = (a, b) => EML(emlLog(a), emlExp(b));
 const emlNeg = (z) => emlSub(emlZero(), z);
 const emlAdd = (a, b) => emlSub(a, emlNeg(b));
 const emlInv = (z) => emlExp(emlNeg(emlLog(z)));
-const emlMul = (a, b) => emlExp(emlAdd(emlLog(a), emlLog(b)));
+const emlMul = (a, b) => {
+  // Avoid log(0) in the multiplicative encoding: 0 * z = 0.
+  const z0 = emlZero();
+  if (a === z0 || b === z0) return z0;
+  return emlExp(emlAdd(emlLog(a), emlLog(b)));
+};
 const emlDiv = (a, b) => emlMul(a, emlInv(b));
 const emlPow = (a, b) => emlExp(emlMul(b, emlLog(a)));
 const emlHalf = (z) => emlMul(z, emlRational(1, 2));
