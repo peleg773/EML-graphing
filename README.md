@@ -1,5 +1,7 @@
 # EML Calculator
 
+Live at [peleg773.github.io/EML-graphing/[(peleg773.github.io/EML-graphing/).
+
 A graphing calculator that compiles standard math expressions into **EML** (Elementary Mathematical Language) — a minimal notation where every real elementary function is expressed using a single two-argument primitive:
 
 ```
