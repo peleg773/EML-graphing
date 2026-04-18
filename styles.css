@@ -479,6 +479,7 @@ a.citation:hover {
 
 .param-slider {
   flex: 1;
+  min-width: 0;
   height: 4px;
   cursor: pointer;
   accent-color: var(--accent);
@@ -512,7 +513,8 @@ a.citation:hover {
 }
 
 .slider-bound {
-  width: 48px;
+  width: 42px;
+  flex: 0 0 42px;
   background: transparent;
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -530,7 +532,7 @@ a.citation:hover {
   margin: 0;
 }
 .slider-bound:focus { border-color: var(--accent); color: var(--text); }
-.slider-step { width: 40px; }
+.slider-step { width: 36px; flex-basis: 36px; }
 
 /* Touch-friendly adjustments */
 @media (pointer: coarse) {
