@@ -25,17 +25,17 @@ This is based on the result from [Odrzywołek (2026)](https://arxiv.org/abs/2603
 
 ## Supported syntax
 
-| Input | Description |
-|---|---|
-| `x`, `1`, `2.5`, `pi`, `e`, `i`, `phi`, `tau` | Variables and constants |
-| `+`, `-`, `*`, `/`, `^` | Arithmetic operators |
-| `sin`, `cos`, `tan`, `sec`, `csc`, `cot` | Trig functions |
-| `asin`, `acos`, `atan` | Inverse trig |
-| `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh` | Hyperbolics |
-| `exp`, `ln`, `log`, `log2`, `log10` | Exponentials and logarithms |
-| `sqrt`, `cbrt`, `abs`, `sign` | Other standard functions |
-| `a = 5` | Define a variable |
-| `f(x) = x^2 + 1` | Define a function |
+| Input                                                         | Description                 |
+| ------------------------------------------------------------- | --------------------------- |
+| `x`, `1`, `2.5`, `pi`, `e`, `i`, `phi`, `tau` | Variables and constants     |
+| `+`, `-`, `*`, `/`, `^`                             | Arithmetic operators        |
+| `sin`, `cos`, `tan`, `sec`, `csc`, `cot`          | Trig functions              |
+| `asin`, `acos`, `atan`                                  | Inverse trig                |
+| `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh` | Hyperbolics                 |
+| `exp`, `ln`, `log`, `log2`, `log10`                 | Exponentials and logarithms |
+| `sqrt`, `cbrt`, `abs`, `sign`, `mod`               | Other standard functions    |
+| `a = 5`                                                     | Define a variable           |
+| `f(x) = x^2 + 1`                                            | Define a function           |
 
 ## How it works
 

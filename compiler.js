@@ -87,7 +87,8 @@ const emlConstI = () => {
   const two = emlInt(2);
   return emlExp(emlDiv(emlLog(minusOne), two)); // I = Exp[Log[-1]/2] = exp(i*pi/2) = i
 };
-const emlConstPi = () => emlMul(emlNeg(emlConstI()), emlLog(emlNeg("1"))); // Pi = -I*Log[-1] = -i*(i*pi) = pi
+const EML_PI_SHORT = "E(E(E(1,E(E(1,E(1,E(E(1,E(1,E(E(1,E(E(1,E(1,E(1,E(E(1,1),1)))),E(1,1))),1))),1))),1)),E(E(E(E(1,E(E(1,E(1,E(E(1,E(1,E(E(1,E(E(1,E(1,E(1,E(E(1,1),1)))),E(1,1))),1))),1))),1)),E(1,E(E(E(1,E(E(1,E(1,E(1,1))),1)),E(1,1)),1))),1),1)),1)";
+const emlConstPi = () => EML_PI_SHORT;
 const emlConstPhi = () => {
   const sqrt5 = emlPow(emlInt(5), emlRational(1, 2));
   const num = emlAdd("1", sqrt5);
@@ -318,7 +319,7 @@ function emit(n, defs) {
   }
 }
 
-function emitCall(n, defs) {
+function emitCall(n, defs = {}) {
   const f = n.name;
   const a = n.args;
   // Check user-defined functions first
@@ -342,6 +343,16 @@ function emitCall(n, defs) {
   if (f === "log10") return emlDiv(emlLog(E(a[0])), emlLog(emlInt(10)));
   if (f === "sqrt" || f === "Sqrt") return emlPow(E(a[0]), emlRational(1, 2));
   if (f === "cbrt") return emlPow(E(a[0]), emlRational(1, 3));
+  if (f === "mod") {
+    if (a.length !== 2) throw new Error("mod expects 2 args");
+    const x = E(a[0]);
+    const y = E(a[1]);
+    const lnMinusOne = emlLog(emlNeg("1"));
+    const phase = emlDiv(emlMul(emlMul(lnMinusOne, emlInt(2)), x), y);
+    const wrapped = emlLog(emlNeg(emlExp(phase)));
+    const normalized = emlDiv(wrapped, lnMinusOne);
+    return emlDiv(emlMul(y, emlAdd("1", normalized)), emlInt(2));
+  }
   if (f === "abs" || f === "Abs") {
     // For real x, abs(x) = sqrt(x^2). Correct for real inputs; graph-only.
     const x = E(a[0]);

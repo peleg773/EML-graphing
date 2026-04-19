@@ -37,6 +37,7 @@ function init() {
   els.resetView.addEventListener("click", () => graph.reset());
 
   els.emlOut.addEventListener("input", onEmlEdited);
+  document.addEventListener("keydown", onGlobalKeyDown);
 
   document.getElementById("keypad").addEventListener("click", (e) => {
     const btn = e.target.closest("button[data-k]");
@@ -46,7 +47,7 @@ function init() {
     if (!row) return;
     const card = els.rows.querySelector(`.row[data-id="${row.id}"]`);
     const input = card && card.querySelector(".row-input");
-    if (!input || input.disabled) return;
+    if (!input || input.readOnly) return;
     input.focus();
     const start = input.selectionStart ?? input.value.length;
     const end = input.selectionEnd ?? input.value.length;
@@ -79,8 +80,29 @@ function init() {
   });
 }
 
-function addRow(text) {
+function onGlobalKeyDown(e) {
+  if (e.defaultPrevented) return;
+  if (e.key !== "Enter" || e.isComposing) return;
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+
+  const active = document.activeElement;
+  if (active === els.emlOut) return; // Let EML textarea keep Enter/newlines.
+  if (active && active.classList && active.classList.contains("row-input") && !active.readOnly) return;
+  if (active && active.tagName === "TEXTAREA" && active !== els.emlOut) return;
+  if (active && active.isContentEditable) return;
+
+  const selected = currentRow();
+  if (!selected) return;
+  e.preventDefault();
+  const idx = state.rows.findIndex((r) => r.id === selected.id);
+  addRow("", idx + 1);
+}
+
+function addRow(text, insertAtIndex) {
   const id = ++rowSeq;
+  const targetIndex = Number.isInteger(insertAtIndex)
+    ? Math.max(0, Math.min(insertAtIndex, state.rows.length))
+    : state.rows.length;
   const row = {
     id,
     text,
@@ -103,14 +125,14 @@ function addRow(text) {
     sliderMax: 10,
     sliderStep: 0.1,
   };
-  state.rows.push(row);
+  state.rows.splice(targetIndex, 0, row);
   state.selectedId = id;
   recompileAll();
   renderRows();
   redraw();
   const newCard = els.rows.querySelector(`.row[data-id="${id}"]`);
   const newInput = newCard && newCard.querySelector(".row-input");
-  if (newInput && !newInput.disabled) newInput.focus();
+  if (newInput && !newInput.readOnly) newInput.focus();
 }
 
 function deleteRow(id) {
@@ -200,14 +222,16 @@ function renderRows() {
     input.className = "row-input";
     if (r.source === "eml" && r.emlNode) {
       input.value = `⟨EML source — ${countTokens(r.emlNode)} tokens⟩`;
-      input.disabled = true;
+      input.readOnly = true;
     } else {
       input.value = r.text;
+      input.readOnly = false;
     }
     input.placeholder = "e.g. sin(x) + 1  or  a = 3";
     input.spellcheck = false;
     input.autocomplete = "off";
     input.addEventListener("input", () => {
+      if (input.readOnly) return;
       r.text = input.value;
       r.source = "math";
       recompileAll();
@@ -221,10 +245,16 @@ function renderRows() {
         }
       }
     });
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.isComposing || input.readOnly) return;
+      e.preventDefault();
+      const idx = state.rows.findIndex((rr) => rr.id === r.id);
+      addRow("", idx + 1);
+    });
     input.addEventListener("dblclick", () => {
-      if (input.disabled) {
+      if (input.readOnly && r.source === "eml") {
         r.source = "math";
-        input.disabled = false;
+        input.readOnly = false;
         input.value = r.text || "";
         input.focus();
       }
@@ -248,7 +278,7 @@ function renderRows() {
       markSelected();
       refreshEmlPanel();
       const inp = card.querySelector(".row-input");
-      if (!inp || inp.disabled) return;
+      if (!inp || inp.readOnly) return;
       if (e.target === inp) return;
       e.preventDefault();
       inp.focus();
@@ -369,7 +399,7 @@ function renderRows() {
   if (wasFocusedRowId) {
     const card = els.rows.querySelector(`.row[data-id="${wasFocusedRowId}"]`);
     const inp = card && card.querySelector(".row-input");
-    if (inp && !inp.disabled) {
+    if (inp) {
       inp.focus();
       if (caret) inp.setSelectionRange(caret[0], caret[1]);
     }
@@ -633,7 +663,7 @@ function onEmlEdited() {
     const card = els.rows.querySelector(`.row[data-id="${r.id}"]`);
     if (card) {
       card.querySelector(".row-input").value = `<EML expression (${countTokens(node)} tokens)>`;
-      card.querySelector(".row-input").disabled = true;
+      card.querySelector(".row-input").readOnly = true;
       updateRowBadge(card, r);
     }
     els.emlStats.textContent = `${countTokens(node)} tokens`;

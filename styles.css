@@ -241,7 +241,8 @@ main {
   width: 100%;
   padding: 2px 0;
 }
-.row-input:disabled { color: var(--muted); font-style: italic; }
+.row-input:disabled,
+.row-input[readonly] { color: var(--muted); font-style: italic; }
 
 .del {
   background: transparent;
