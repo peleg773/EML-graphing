@@ -2,6 +2,7 @@
   --bg: #0b0e1a;
   --panel: #121629;
   --panel-2: #181d35;
+  --overlay: rgba(18, 22, 41, 0.88);
   --text: #e6e9f5;
   --muted: #8a93b8;
   --accent: #6ea8fe;
@@ -15,6 +16,7 @@ body.light {
   --bg: #f5f6fa;
   --panel: #ffffff;
   --panel-2: #f1f3fa;
+  --overlay: rgba(255, 255, 255, 0.9);
   --text: #1d2140;
   --muted: #6a7090;
   --accent: #3870e0;
@@ -384,6 +386,51 @@ main {
 }
 #canvas:active { cursor: grabbing; }
 
+.graph-credit {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--overlay);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+}
+
+.graph-credit-copy {
+  white-space: nowrap;
+}
+
+.graph-credit a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 600;
+  transition: color 0.12s ease;
+  pointer-events: auto;
+}
+
+.graph-credit a:hover {
+  color: var(--accent);
+}
+
+.graph-credit svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
 /* EML panel */
 #eml-out {
   flex: 1;
@@ -551,4 +598,12 @@ a.citation:hover {
   header h1 span[style] { display: none; }
   .panel-header span[style] { display: none; }
   #canvas { touch-action: none; }
+  .graph-credit {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    justify-content: space-between;
+    gap: 10px;
+    border-radius: 14px;
+  }
 }
